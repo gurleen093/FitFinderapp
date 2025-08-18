@@ -1,10 +1,30 @@
 # backend/expert_system.py
 from typing import List, Dict
+from .rules_engine import evaluate_skills_match
 
-def score_from_skill_lists(resume_skills: List[str], jd_skills: List[str]) -> Dict:
+def score_from_skill_lists(resume_skills: List[str], jd_skills: List[str], job_description: str = "") -> Dict:
     """
-    Compute overlap-based score from two skill lists (already normalized to lowercase).
-    Score = matched / unique jd skills * 100 (capped).
+    Enhanced skill matching using rules-based expert system.
+    Maintains backward compatibility while providing advanced matching.
+    """
+    if not jd_skills:
+        return {"score": 0, "matched": [], "missing": []}
+    
+    # Use the new rules engine for advanced matching
+    result = evaluate_skills_match(resume_skills, jd_skills, job_description)
+    
+    # Return enhanced result with backward compatibility
+    return {
+        "score": result["score"],
+        "matched": result["matched"],
+        "missing": result["missing"],
+        "rules_analysis": result.get("detailed_analysis", {}),
+        "recommendations": result.get("recommendations", [])
+    }
+
+def score_from_skill_lists_simple(resume_skills: List[str], jd_skills: List[str]) -> Dict:
+    """
+    Original simple overlap-based scoring (kept for fallback).
     """
     jd_set = {s.strip().lower() for s in jd_skills if s.strip()}
     res_set = {s.strip().lower() for s in resume_skills if s.strip()}

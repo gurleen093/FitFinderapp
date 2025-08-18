@@ -5,6 +5,7 @@ from backend.resume_praser import extract_text_from_pdf, extract_text_from_docx
 from backend.job_fetcher import fetch_jobs
 from backend.expert_system import score_from_skill_lists
 from backend.rag_matcher import llm_analysis, extract_skills
+from backend.radar_chart import create_skills_radar_chart, create_skills_match_summary, create_skill_category_chart
 
 
 # ---------------- Page config ----------------
@@ -124,6 +125,14 @@ if "resume_text" not in st.session_state:
     st.session_state.resume_text = ""
 if "jobs" not in st.session_state:
     st.session_state.jobs = []
+if "extracted_skills" not in st.session_state:
+    st.session_state.extracted_skills = []
+if "edited_skills" not in st.session_state:
+    st.session_state.edited_skills = []
+if "skills_extracted" not in st.session_state:
+    st.session_state.skills_extracted = False
+if "skills_confirmed" not in st.session_state:
+    st.session_state.skills_confirmed = False
 
 
 # ---------------- Upload Resume ----------------
@@ -133,17 +142,105 @@ if uploaded_file:
         st.session_state.resume_text = extract_text_from_pdf(uploaded_file)
     else:
         st.session_state.resume_text = extract_text_from_docx(uploaded_file)
+    st.session_state.skills_extracted = False
+    st.session_state.skills_confirmed = False
     st.success("✅ Resume uploaded successfully!")
 
 resume_text = st.session_state.resume_text
 
+# ---------------- Extract and Display Skills ----------------
+if resume_text and not st.session_state.skills_extracted:
+    if st.button("🔍 Extract Skills from Resume"):
+        with st.spinner("Extracting skills from your resume..."):
+            skills = extract_skills(resume_text, source="resume")
+            st.session_state.extracted_skills = skills
+            st.session_state.edited_skills = skills.copy()
+            st.session_state.skills_extracted = True
+            st.session_state.skills_confirmed = False
+        st.success("✅ Skills extracted successfully!")
+
+# Display skills if extracted
+if st.session_state.skills_extracted and st.session_state.extracted_skills:
+    st.subheader("🎯 Your Skills")
+    st.success("✅ **Skills Extracted Successfully!**")
+    
+    # Display extracted skills in a colorful table format
+    st.markdown("**Your Skills:**")
+    
+    # Create skills data for table display
+    skills_data = []
+    colors = ["🔵", "🟢", "🟡", "🔴", "🟣", "🟠"]  # Cycle through different colors
+    
+    # Group skills into rows of 3 for better table layout
+    skills_list = st.session_state.extracted_skills
+    for i in range(0, len(skills_list), 3):
+        row = skills_list[i:i+3]
+        # Pad with empty strings if needed
+        while len(row) < 3:
+            row.append("")
+        skills_data.append(row)
+    
+    # Create DataFrame for table display
+    import pandas as pd
+    df = pd.DataFrame(skills_data, columns=["Skill 1", "Skill 2", "Skill 3"])
+    
+    # Style the dataframe with colors and formatting
+    def style_skills_table(df):
+        # Create a styler object
+        styler = df.style
+        
+        # Apply styling
+        styler = styler.set_properties(**{
+            'background-color': '#f0f8ff',
+            'border': '2px solid #4CAF50',
+            'border-radius': '8px',
+            'padding': '10px',
+            'text-align': 'center',
+            'font-weight': 'bold',
+            'color': '#2E8B57'
+        })
+        
+        # Style headers
+        styler = styler.set_table_styles([
+            {'selector': 'th', 'props': [
+                ('background-color', '#4CAF50'),
+                ('color', 'white'),
+                ('font-weight', 'bold'),
+                ('text-align', 'center'),
+                ('padding', '12px'),
+                ('border-radius', '8px 8px 0 0')
+            ]},
+            {'selector': 'td', 'props': [
+                ('padding', '8px 12px'),
+                ('border-bottom', '1px solid #ddd')
+            ]},
+            {'selector': '', 'props': [
+                ('border-collapse', 'collapse'),
+                ('margin', '10px 0'),
+                ('width', '100%')
+            ]}
+        ])
+        
+        return styler
+    
+    # Display the styled table
+    if not df.empty and not all(df.iloc[0] == ""):
+        styled_df = style_skills_table(df)
+        st.dataframe(styled_df, use_container_width=True, hide_index=True)
+    
+    st.markdown(f"**Total Skills: {len(st.session_state.extracted_skills)}**")
+    
+    # Set skills as confirmed and ready to use
+    st.session_state.edited_skills = st.session_state.extracted_skills.copy()
+    st.session_state.skills_confirmed = True
+
 
 # ---------------- Job Input ----------------
-job_option = st.radio("Select Job Input Method", ["Find Jobs", "Analyze Job Description"])
+job_option = st.radio("Select Job Input Method", ["Find Jobs by Query", "Analyze Job Description"])
 
 
-# ---------------- Find Jobs (resume required to run) ----------------
-if job_option == "Find Jobs":
+# ---------------- Find Jobs by Query (traditional search) ----------------
+if job_option == "Find Jobs by Query":
     query = st.text_input("Enter Job Title (e.g. Data Scientist, Web Developer)")
     if st.button("🔎 Find Jobs"):
         if not resume_text:
@@ -174,10 +271,15 @@ elif job_option == "Analyze Job Description":
         elif not (job_description or "").strip():
             st.warning("Please paste a job description.")
         else:
-            # 1) Extract skills and compute overlap score (0..100)
-            resume_skills = extract_skills(resume_text, source="resume")
+            # 1) Extract skills and compute enhanced rule-based score
+            if st.session_state.skills_extracted and st.session_state.edited_skills:
+                # Use user's edited skills for more accurate matching
+                resume_skills = st.session_state.edited_skills
+            else:
+                resume_skills = extract_skills(resume_text, source="resume")
+            
             jd_skills = extract_skills(job_description, source="job")
-            scored = score_from_skill_lists(resume_skills, jd_skills)  # {'score','matched','missing'}
+            scored = score_from_skill_lists(resume_skills, jd_skills, job_description)
 
             # 2) Show score prominently (out of 10)
             score_100 = int(scored.get("score", 0))
@@ -203,7 +305,93 @@ elif job_option == "Analyze Job Description":
             st.subheader("💡 Recommendation")
             st.write(reco_text)
 
-            # 4) AI-filtered learning skills → links
+            # 4) Skills Radar Chart Visualization
+            st.write("🔍 Debug Info:")
+            st.write(f"- extracted_skills: {len(st.session_state.get('extracted_skills', []))} skills")
+            st.write(f"- edited_skills: {len(st.session_state.get('edited_skills', []))} skills")
+            st.write(f"- skills_extracted: {st.session_state.get('skills_extracted', False)}")
+            st.write(f"- skills_confirmed: {st.session_state.get('skills_confirmed', False)}")
+            st.write(f"- jd_skills count: {len(jd_skills) if jd_skills else 0}")
+            
+            # Try to show radar chart
+            try:
+                user_skills_for_chart = st.session_state.get('edited_skills', []) or st.session_state.get('extracted_skills', [])
+                
+                if user_skills_for_chart and jd_skills:
+                    st.subheader("📊 Skills Comparison Radar Chart")
+                    st.write(f"Using {len(user_skills_for_chart)} user skills and {len(jd_skills)} job skills")
+                else:
+                    st.warning(f"Cannot show radar chart: user_skills={len(user_skills_for_chart) if user_skills_for_chart else 0}, job_skills={len(jd_skills) if jd_skills else 0}")
+                
+                # Use extracted or edited skills
+                user_skills_for_chart = st.session_state.get('edited_skills', []) or st.session_state.get('extracted_skills', [])
+                
+                # Create radar chart
+                radar_fig = create_skills_radar_chart(
+                    user_skills_for_chart, 
+                    jd_skills,
+                    "Job Position"
+                )
+                st.plotly_chart(radar_fig, use_container_width=True)
+                
+                # Create skills summary
+                match_summary = create_skills_match_summary(user_skills_for_chart, jd_skills)
+                
+                # Display summary metrics
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Match %", f"{match_summary['match_percentage']}%")
+                with col2:
+                    st.metric("Matched Skills", match_summary['matched_count'])
+                with col3:
+                    st.metric("Missing Skills", match_summary['missing_count'])
+                with col4:
+                    st.metric("Extra Skills", match_summary['extra_count'])
+                
+                # Skills breakdown
+                if match_summary['matched_skills']:
+                    st.success(f"✅ **Matched Skills:** {', '.join(match_summary['matched_skills'][:10])}")
+                if match_summary['missing_skills']:
+                    st.warning(f"⚠️ **Missing Skills:** {', '.join(match_summary['missing_skills'][:10])}")
+                if match_summary['extra_skills']:
+                    st.info(f"➕ **Your Extra Skills:** {', '.join(match_summary['extra_skills'][:10])}")
+                
+                # Category comparison chart
+                st.subheader("📈 Skills by Category")
+                category_fig = create_skill_category_chart(user_skills_for_chart, jd_skills)
+                st.plotly_chart(category_fig, use_container_width=True)
+                
+            except Exception as e:
+                st.error(f"Error creating radar chart: {str(e)}")
+                st.write("Radar chart creation failed, but other analysis continues...")
+
+            # 5) Enhanced Rules-based Analysis
+            rules_analysis = scored.get("rules_analysis", {})
+            if rules_analysis:
+                with st.expander("🔍 Detailed Match Analysis"):
+                    # Show rule-by-rule breakdown
+                    rule_results = rules_analysis.get("rule_results", [])
+                    if rule_results:
+                        for rule_result in rule_results:
+                            rule_name = rule_result.get("rule_name", "")
+                            rule_score = rule_result.get("score", 0)
+                            rule_explanation = rule_result.get("explanation", "")
+                            rule_matches = rule_result.get("matches", [])
+                            
+                            st.write(f"**{rule_name}** (Score: {rule_score:.1f})")
+                            st.write(rule_explanation)
+                            if rule_matches:
+                                st.write("Matches:", ", ".join(rule_matches[:3]))
+                            st.divider()
+                
+                # Show expert recommendations
+                recommendations = scored.get("recommendations", [])
+                if recommendations:
+                    st.subheader("🎯 Expert Recommendations")
+                    for rec in recommendations:
+                        st.markdown(f"• {rec}")
+
+            # 6) AI-filtered learning skills → links
             missing_raw = scored.get("missing", []) or []
             ai_skills = pick_trainable_skills_ai(missing_raw, resume_text, job_description)
 
